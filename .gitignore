@@ -1,0 +1,76 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code
+.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# 构建残留产物
+assets/flutter_assets/
+
+# TaiXu 工具链产物（不入库）
+.taixu/
+.taixu-project.properties
+
+# Widget Preview related
+.widget_preview/
+
+# ===== 敏感与密钥文件（严禁提交）=====
+keystore.properties
+android/keystore.properties
+android/keystore/
+*.jks
+*.keystore
+
+# GitHub 同步脚本（含个人 Token，严禁提交）
+github_sync.sh
+
+# ===== APK 反编译产物与解包残留（仅本地分析用）=====
+/apk_decoded/
+/classes*.dex
+/resources.arsc
+/resources.arsc
+/AndroidManifest.xml
+/META-INF/
+/res/
+/kotlin/
+/DebugProbesKt.bin
+/gen_snapshot
+/android-arm64-release-*.zip
