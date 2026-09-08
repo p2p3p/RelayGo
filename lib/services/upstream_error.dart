@@ -82,6 +82,10 @@ class UpstreamErrorClassifier {
   static bool isRecoverableTpm(int statusCode, String body) =>
       RateLimiter.isRecoverableTpmLimit(statusCode, body);
 
+  /// 是否为「可等待令牌恢复后重试同 key」的 QPS/RPM（请求数）限流。
+  static bool isRecoverableQps(int statusCode, String body) =>
+      RateLimiter.isRecoverableQpsLimit(statusCode, body);
+
   static bool _containsAny(String haystack, List<String> needles) {
     for (final n in needles) {
       if (haystack.contains(n)) return true;

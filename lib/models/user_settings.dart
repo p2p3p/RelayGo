@@ -35,6 +35,7 @@ class UserSettings {
   int tokenRateLimitPerMinute; // 单 key 每分钟 token 上限，0 = 不限
   double burstMultiplier; // 令牌桶突发倍数
   bool adaptiveTpmEnabled; // 自适应 TPM 挡板 + 429 等待重试（默认开启）
+  bool adaptiveQpsEnabled; // 自适应 QPS/RPM 挡板（学习上游请求数限流，默认开启）
 
   // —— 在线更新（启动时自动检查，配置项不暴露在设置页）——
   String updateFeedUrl;
@@ -84,6 +85,7 @@ class UserSettings {
     this.tokenRateLimitPerMinute = Constants.defaultTokenRateLimitPerMinute,
     this.burstMultiplier = Constants.defaultBurstMultiplier,
     this.adaptiveTpmEnabled = Constants.defaultAdaptiveTpmEnabled,
+    this.adaptiveQpsEnabled = Constants.defaultAdaptiveQpsEnabled,
     this.updateFeedUrl = Constants.defaultUpdateFeedUrl,
     this.updateChannel = Constants.defaultUpdateChannel,
     this.autoCheckUpdate = true,
@@ -135,6 +137,8 @@ class UserSettings {
           Constants.defaultBurstMultiplier,
       adaptiveTpmEnabled: json['adaptive_tpm_enabled'] as bool? ??
           Constants.defaultAdaptiveTpmEnabled,
+      adaptiveQpsEnabled: json['adaptive_qps_enabled'] as bool? ??
+          Constants.defaultAdaptiveQpsEnabled,
       updateFeedUrl:
           json['update_feed_url'] as String? ?? Constants.defaultUpdateFeedUrl,
       updateChannel: json['update_channel'] as String? ??
@@ -183,6 +187,7 @@ class UserSettings {
       'token_rate_limit_per_minute': tokenRateLimitPerMinute,
       'burst_multiplier': burstMultiplier,
       'adaptive_tpm_enabled': adaptiveTpmEnabled,
+      'adaptive_qps_enabled': adaptiveQpsEnabled,
       'update_feed_url': updateFeedUrl,
       'update_channel': updateChannel,
       'auto_check_update': autoCheckUpdate,
@@ -221,6 +226,7 @@ class UserSettings {
     int? tokenRateLimitPerMinute,
     double? burstMultiplier,
     bool? adaptiveTpmEnabled,
+    bool? adaptiveQpsEnabled,
     String? updateFeedUrl,
     String? updateChannel,
     bool? autoCheckUpdate,
@@ -258,6 +264,7 @@ class UserSettings {
           tokenRateLimitPerMinute ?? this.tokenRateLimitPerMinute,
       burstMultiplier: burstMultiplier ?? this.burstMultiplier,
       adaptiveTpmEnabled: adaptiveTpmEnabled ?? this.adaptiveTpmEnabled,
+      adaptiveQpsEnabled: adaptiveQpsEnabled ?? this.adaptiveQpsEnabled,
       updateFeedUrl: updateFeedUrl ?? this.updateFeedUrl,
       updateChannel: updateChannel ?? this.updateChannel,
       autoCheckUpdate: autoCheckUpdate ?? this.autoCheckUpdate,

@@ -441,6 +441,8 @@ class ProxyServer {
         final estimatedTokens = TokenEstimator.extractActualTokens(
             written.captured.isEmpty ? '' : String.fromCharCodes(written.captured));
         adaptiveRateLimitManager.onSuccess(key.id, estimatedTokens > 0 ? estimatedTokens : usage.total);
+        // QPS/RPM 自适应：本次成功 → 累计稳定时长，够阈值则缓慢上调学习上限
+        rateLimiter.noteQpsHealthy(key);
       } else {
         loadBalancer.recordFailure(key);
       }
@@ -637,6 +639,12 @@ class ProxyServer {
     int? tpmRetryAfter; // 最终建议客户端等待的秒数（遭遇可恢复 TPM 限流时）
     bool sawRecoverable429 = false;
     ApiKey? lastTpmKey; // 最近一次触发可恢复 TPM 429 的 key
+    // 针对「可恢复 QPS/RPM 限流」（429 + requests/rpm/qps 关键词）的等待预算与状态
+    final qpsDeadline =
+        DateTime.now().millisecondsSinceEpoch + Constants.qpsWaitBudgetMs;
+    int? qpsRetryAfter;
+    bool sawRecoverableQps = false;
+    ApiKey? lastQpsKey; // 最近一次触发可恢复 QPS/RPM 429 的 key
     int quotaExhaustedCount = 0; // 本轮请求命中「额度耗尽」的 key 数
     // 自动切换次数根据候选池大小动态决定：每个 key 至少尝试一次，
     // 不再使用固定的 maxRetryKeys 上限。额外预留一倍余量用于 TPM 同 key 重试。
@@ -752,6 +760,51 @@ class ProxyServer {
             break;
           }
 
+          // —— 可恢复 QPS/RPM（请求数）限流：学习下调该 key 的每分钟请求上限，
+          // 并在同一 key 上等待令牌恢复后重试（与 TPM 分支对称）。
+          // 仅对「429 + requests/rpm/qps 关键词」且非 TPM 时生效。
+          if (kind == UpstreamErrorKind.rateLimited &&
+              !UpstreamErrorClassifier.isRecoverableTpm(
+                  r.statusCode, errBody ?? '') &&
+              UpstreamErrorClassifier.isRecoverableQps(
+                  r.statusCode, errBody ?? '') &&
+              Constants.qpsWaitBudgetMs > 0) {
+            adaptiveRateLimitManager.onRateLimited(key.id, r.headers);
+            final oldQpsBefore = rateLimiter.learnedQpm(key) ??
+                (key.maxRequestsPerMinute > 0
+                    ? key.maxRequestsPerMinute
+                    : rateLimiter.effectiveRpm(key));
+            rateLimiter.recordUpstreamQpsLimit(key);
+            sawRecoverableQps = true;
+            lastQpsKey = key;
+            _recordRateLimitEvent(
+              key: key,
+              reason: 'qps',
+              model: proxyRequest.model,
+              oldRpmLimit: oldQpsBefore,
+              newRpmLimit: rateLimiter.learnedQpm(key) ?? oldQpsBefore,
+              detail: '上游 QPS/RPM 429：学习上限 $oldQpsBefore → ${rateLimiter.learnedQpm(key)}（每分钟请求数）',
+            );
+            // 优先采用上游 Retry-After，否则用本地令牌桶恢复时间
+            var waitMs = _retryAfterSecondsFromHeaders(r) * 1000;
+            if (waitMs <= 0) waitMs = rateLimiter.qpsWaitMillis(key);
+            if (waitMs <= 0) waitMs = 1000; // 最小退避 1s
+            final nowQps = DateTime.now().millisecondsSinceEpoch;
+            final budgetLeftQps = qpsDeadline - nowQps;
+            if (waitMs > budgetLeftQps) {
+              waitMs = budgetLeftQps > 0 ? budgetLeftQps : 0;
+            }
+            if (waitMs > 0) {
+              idx--;
+              attempts--; // QPS 重试不是「切换 key」，不消耗切换次数配额
+              await Future<void>.delayed(Duration(milliseconds: waitMs));
+              continue; // 绕过 recordFailure：临时限流不是 key 故障
+            }
+            // 预算耗尽：记录重试建议，跳出循环改走 429 + Retry-After
+            qpsRetryAfter = (budgetLeftQps ~/ 1000).clamp(1, 120);
+            break;
+          }
+
           // —— 无感切换 key：仅当错误源于「key / 上游 / 额度」（换一个 key 就可能
           // 成功）时才静默重试；请求本身的内容问题（badRequest/unknown）直接透传。
           if (!UpstreamErrorClassifier.isSilentlyRetryable(kind)) {
@@ -840,6 +893,19 @@ class ProxyServer {
               : (rateLimiter.tpmWaitMillis(lastTpmKey) ~/ 1000).clamp(1, 120));
       return _ForwardFailure(
         '上游 TPM 限流，等待 $secs 秒后重试',
+        lastUpstreamError,
+        lastActualModel,
+        secs,
+      );
+    }
+    // 遭遇可恢复 QPS/RPM 限流：同样返回 429 + Retry-After 让客户端排队重发。
+    if (qpsRetryAfter != null || sawRecoverableQps) {
+      final secs = qpsRetryAfter ??
+          (lastQpsKey == null
+              ? 5
+              : (rateLimiter.qpsWaitMillis(lastQpsKey) ~/ 1000).clamp(1, 120));
+      return _ForwardFailure(
+        '上游请求速率（QPS/RPM）限流，等待 $secs 秒后重试',
         lastUpstreamError,
         lastActualModel,
         secs,

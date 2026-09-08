@@ -19,8 +19,8 @@ class Constants {
   static const String appName = 'RelayGo';
   static const String appSlogan = 'Your AI Relay, Ready to Go';
   static const String appDescription = 'Mobile AI API Relay & Key Manager';
-  static const String appVersion = '1.0.2';
-  static const int appBuildNumber = 1;
+  static const String appVersion = '1.0.3';
+  static const int appBuildNumber = 3;
 
   // 在线更新
   // 方案一（推荐）：GitHub Releases + 应用内检查。配置 `updateGithubRepo`
@@ -162,6 +162,52 @@ class Constants {
     'requests_limit_reached',
     'context_length_exceeded too_many_requests',
     'too_many_requests',
+  ];
+
+  // —— QPS/RPM 自适应挡板（应对上游「每秒/每分钟请求数」限流）——
+  /// 自适应 QPS/RPM 挡板默认开启：结合上游 429（requests/rpm/qps 类）反馈，
+  /// 用 AIMD 学习每个 key 的实际每分钟请求上限，动态收紧本地令牌桶速率，
+  /// 从源头减少撞上游 QPS 墙造成的反复换 key 与 429 中断。
+  static const bool defaultAdaptiveQpsEnabled = true;
+
+  /// 乘性减：撞上游 QPS/RPM 429 时把学到的每分钟请求上限快速压到其 <1 比例。
+  static const double qpsAimdDown = 0.7;
+
+  /// 加性增：一段时间（[qpsStableUpMs]）无 429 后按比例试探性上调，贴近真实上限。
+  static const double qpsAimdUp = 0.05;
+
+  /// 学习值下限保护：乘性减后不得低于此每分钟请求数，防止 key 被压到接近 0 卡死。
+  static const int minLearnedQps = 6;
+
+  /// 学习值上限保护：加性增不得超过此每分钟请求数，防止无限上调再次撞墙。
+  static const int maxLearnedQps = 6000;
+
+  /// 首次撞墙、尚无可信观测时的学习起点（每分钟请求数）。
+  static const int qpsInitialLearned = 30;
+
+  /// 加性增节奏：连续无 429 达到该稳定时长（毫秒）后，上调一次学习上限。
+  static const int qpsStableUpMs = 30000;
+
+  /// 撞可恢复 QPS/RPM 429 时，单次请求在同一 key 上等待令牌恢复的总预算（毫秒）。
+  /// 超过预算转为返回 429 + Retry-After。设为 0 则不等待、直接切换 key。
+  static const int qpsWaitBudgetMs = 5000;
+
+  /// 识别「可恢复 QPS/RPM 限流」的错误体关键词（区别于 TPM 关键词）。
+  static const List<String> qpsRecoverableKeywords = [
+    'requests_per_minute',
+    'requests per minute',
+    'request_limit',
+    'requests_limit',
+    'rpm',
+    'per_second',
+    'requests per second',
+    'rate_limit_exceeded',
+    'too_many_requests',
+    'too many requests',
+    'qps',
+    'current request count',
+    'exceeded rate limit',
+    'rate limit exceeded',
   ];
 
   // —— 上游错误智能识别（无感切换 key，避免中断用户）——

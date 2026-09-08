@@ -31,8 +31,8 @@ class RateLimitResult {
 /// 容量 = 速率 × 突发倍数，空闲时累积令牌以吸收瞬时峰值。
 class TokenBucket {
   double tokens;
-  final double capacity;
-  final double refillPerSec;
+  double capacity;
+  double refillPerSec;
   double _last;
 
   TokenBucket({required this.capacity, required this.refillPerSec, double? nowSec})
@@ -140,6 +140,13 @@ class RateLimiter {
   /// 发请求前先按「学到的上限 × 余量系数」挡板，从源头减少 TPM 429。
   bool adaptiveTpmEnabled;
 
+  /// 是否启用「自适应 QPS/RPM 挡板」。开启后：
+  /// - 撞上游「请求数限流」429 时按 AIMD 下调该 key 学到的每分钟请求上限；
+  /// - 持续无 429 时缓慢上调，贴近真实上限；
+  /// - 学到的上限会接入令牌桶速率（即使 key 未配置 maxRequestsPerMinute=0，
+  ///   也会启用软挡板），从源头平滑掉队、避免反复撞上游 QPS 墙。
+  bool adaptiveQpsEnabled;
+
   /// 单 IP 每分钟请求上限（0 = 不限制）
   int requestsPerMinutePerIp;
 
@@ -162,12 +169,20 @@ class RateLimiter {
   /// keyId + '|' + model → 上次无 429 的稳定时长累计（ms），用于加性增。
   final Map<String, int> _tpmStableMs = {};
 
+  /// keyId → 学习到的每分钟请求上限（QPM，由上游 QPS/RPM 429 反馈 AIMD 得出）。
+  final Map<String, int> _learnedQpm = {};
+  /// keyId → 上次无 429 的稳定时长累计（ms），用于 QPM 加性增。
+  final Map<String, int> _qpmStableMs = {};
+  /// keyId → 上次记账（成功/撞墙）的时间戳（ms），用于累计真实稳定时长。
+  final Map<String, int> _qpmLastSeen = {};
+
   RateLimiter({
     this.burstMultiplier = Constants.defaultBurstMultiplier,
     this.tokensPerMinutePerKey = Constants.defaultTokenRateLimitPerMinute,
     this.requestsPerMinutePerIp = Constants.defaultIpRateLimitPerMinute,
     this.globalRequestsPerMinute = Constants.defaultGlobalRpmLimit,
     this.adaptiveTpmEnabled = Constants.defaultAdaptiveTpmEnabled,
+    this.adaptiveQpsEnabled = Constants.defaultAdaptiveQpsEnabled,
     this.enabled = true,
   });
 
@@ -236,7 +251,7 @@ class RateLimiter {
       }
     }
 
-    final rpm = key.maxRequestsPerMinute;
+    final rpm = _effectiveRpm(key);
     if (rpm <= 0) return const RateLimitResult.allow();
     final bucket = _bucketFor(key);
     // 只做探测，不消耗（真正消耗在 consumeKey）
@@ -262,7 +277,7 @@ class RateLimiter {
   /// 实际发起转发时扣减令牌
   bool consumeKey(ApiKey key) {
     if (!enabled) return true;
-    if (key.maxRequestsPerMinute <= 0) return true;
+    if (_effectiveRpm(key) <= 0) return true;
     return _bucketFor(key).tryConsume();
   }
 
@@ -359,7 +374,7 @@ class RateLimiter {
   ///
   /// 返回 -1 表示该 key 未配置 RPM 限制（不受限）。
   double rpmRemaining(ApiKey key) {
-    final rpm = key.maxRequestsPerMinute;
+    final rpm = _effectiveRpm(key);
     if (rpm <= 0) return -1;
     final bucket = _bucketFor(key);
     return bucket.tokens.clamp(0, bucket.capacity).toDouble();
@@ -408,26 +423,117 @@ class RateLimiter {
     return tw.retryAfterSeconds(nowMs: now) * 1000;
   }
 
+  // ——————————————————————————————————————————
+  // 自适应 QPS/RPM 学习（每 key 的每分钟请求数上限，AIMD）
+  // ——————————————————————————————————————————
+
+  /// 当前学习的每 key 每分钟请求上限（QPM）。null = 尚未学习。
+  int? learnedQpm(ApiKey key) => _learnedQpm[key.id];
+
+  /// 生效的每分钟请求上限（结合配置硬上限与学习值），0 = 不限制。
+  int effectiveRpm(ApiKey key) => _effectiveRpm(key);
+
+  /// 综合「配置硬上限」与「学习值」得到实际生效的每分钟请求上限（0 = 不限）。
+  /// - 配置 > 0：以配置为准，但若学习值更严则收紧到学习值（留 5% 余量）。
+  /// - 配置 = 0（默认不限）：若已学习到上限，则用学习值启用软挡板；否则不限。
+  int _effectiveRpm(ApiKey key) {
+    final configured = key.maxRequestsPerMinute;
+    final learned = adaptiveQpsEnabled ? _learnedQpm[key.id] : null;
+    if (configured > 0) {
+      if (learned != null && learned < configured) {
+        return (learned * 0.95).floor().clamp(1, configured);
+      }
+      return configured;
+    }
+    if (learned != null) {
+      return (learned * 0.95).floor().clamp(1, Constants.maxLearnedQps);
+    }
+    return 0;
+  }
+
+  /// 距该 key 令牌桶恢复 1 个令牌还需多少毫秒（用于 429 等待重试）。
+  int qpsWaitMillis(ApiKey key) {
+    if (_effectiveRpm(key) <= 0) return 0;
+    final bucket = _bucketFor(key);
+    if (bucket.tokens >= 1.0) return 0;
+    return (bucket.waitSecondsFor(1) * 1000).ceil();
+  }
+
+  /// 识别「可恢复 QPS/RPM 限流」：429 且命中 requests/rpm/qps 类关键词。
+  static bool isRecoverableQpsLimit(int statusCode, String body) {
+    if (statusCode != 429) return false;
+    final b = body.toLowerCase();
+    for (final kw in Constants.qpsRecoverableKeywords) {
+      if (b.contains(kw)) return true;
+    }
+    return false;
+  }
+
+  /// 上游返回 QPS/RPM 429：把该 key 学到的每分钟请求上限乘性下调（MD）。
+  void recordUpstreamQpsLimit(ApiKey key) {
+    if (!adaptiveQpsEnabled) return;
+    final current = _learnedQpm[key.id];
+    final base = current ??
+        (key.maxRequestsPerMinute > 0
+            ? key.maxRequestsPerMinute
+            : Constants.qpsInitialLearned);
+    final reduced = (base * Constants.qpsAimdDown).round();
+    _learnedQpm[key.id] =
+        reduced.clamp(Constants.minLearnedQps, Constants.maxLearnedQps);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _qpmLastSeen[key.id] = now;
+    _qpmStableMs[key.id] = 0;
+  }
+
+  /// 该 key 一次健康（成功）响应：累计真实稳定时长，够阈值则加性增（AI）上调。
+  /// 仅在已建立学习值（曾撞过 QPS 429）时才上调；未撞过墙则维持配置/不限，
+  /// 避免对从未限流的 key 凭空建立挡板。
+  void noteQpsHealthy(ApiKey key) {
+    if (!adaptiveQpsEnabled) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = _qpmLastSeen[key.id] ?? now;
+    _qpmLastSeen[key.id] = now;
+    final learned = _learnedQpm[key.id];
+    if (learned == null) return; // 未撞过墙 → 不主动上调
+    final dt = (now - last).clamp(0, Constants.qpsStableUpMs);
+    final stable = (_qpmStableMs[key.id] ?? 0) + dt;
+    if (stable < Constants.qpsStableUpMs) {
+      _qpmStableMs[key.id] = stable;
+      return;
+    }
+    _qpmStableMs[key.id] = 0;
+    final ceiling = key.maxRequestsPerMinute > 0
+        ? key.maxRequestsPerMinute
+        : Constants.maxLearnedQps;
+    final bumped = (learned * (1 + Constants.qpsAimdUp)).round();
+    _learnedQpm[key.id] = bumped > ceiling ? ceiling : bumped;
+  }
+
   /// 清除某个 key 的学习状态（删除 key / 更新 key 后调用，避免残留旧上限）。
   void resetLearn(ApiKey key) {
     final prefix = '${key.id}|';
     _learnedTpm.removeWhere((k, _) => k.startsWith(prefix));
     _tpmStableMs.removeWhere((k, _) => k.startsWith(prefix));
+    _learnedQpm.remove(key.id);
+    _qpmStableMs.remove(key.id);
+    _qpmLastSeen.remove(key.id);
   }
 
   TokenBucket _bucketFor(ApiKey key) {
-    final rpm = key.maxRequestsPerMinute;
+    final rpm = _effectiveRpm(key);
     final refill = rpm / 60.0;
     final capacity = rpm * burstMultiplier;
-    final existing = _keyBuckets[key.id];
-    // key 的 RPM 被修改后重建桶
-    if (existing == null ||
-        (existing.refillPerSec - refill).abs() > 0.0001 ||
-        (existing.capacity - capacity).abs() > 0.0001) {
-      final b = TokenBucket(capacity: capacity, refillPerSec: refill);
-      _keyBuckets[key.id] = b;
-      return b;
+    var existing = _keyBuckets[key.id];
+    if (existing == null) {
+      existing = TokenBucket(capacity: capacity, refillPerSec: refill);
+      _keyBuckets[key.id] = existing;
+      return existing;
     }
+    // 动态调参：配置或学习值变化时更新速率/容量，保留当前令牌并按新容量封顶，
+    // 避免重建把突发令牌重置为满而再次撞墙。
+    existing.refillPerSec = refill;
+    existing.capacity = capacity;
+    if (existing.tokens > capacity) existing.tokens = capacity;
     return existing;
   }
 
@@ -447,6 +553,8 @@ class RateLimiter {
           'tokens_per_minute_per_key': tokensPerMinutePerKey,
           'adaptive_tpm_enabled': adaptiveTpmEnabled,
           'learned_tpm_entries': _learnedTpm.length,
+          'adaptive_qps_enabled': adaptiveQpsEnabled,
+          'learned_qps_entries': _learnedQpm.length,
           'requests_per_minute_per_ip': requestsPerMinutePerIp,
           'global_requests_per_minute': globalRequestsPerMinute,
         },

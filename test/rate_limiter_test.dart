@@ -134,10 +134,10 @@ void main() {
       );
       // 未配置硬限（tokensPerMinutePerKey=0），自适应挡板开启
       final rl = RateLimiter(enabled: true, adaptiveTpmEnabled: true, tokensPerMinutePerKey: 0);
-      // 模拟：学过其上限约 100 token/分钟
-      rl.recordTokens(key, 80, model: 'gpt-4o');
-      rl.recordUpstreamTpmLimit(key, 'gpt-4o', 80); // 乘性减：80*0.85≈68
-      // 现在窗口内累计 80 token 已超过学到的上限 68*0.95≈64，应被挡板拒绝
+      // 模拟：窗口用量 5000 token/分钟（真实 TPM 量级，须高于 minLearnedTpm 下限）
+      rl.recordTokens(key, 5000, model: 'gpt-4o');
+      rl.recordUpstreamTpmLimit(key, 'gpt-4o', 5000); // 乘性减：5000*0.85=4250
+      // 现在窗口内累计 5000 已超过学习阈值 4250*0.95≈4037，应被挡板拒绝
       expect(rl.checkKey(key, model: 'gpt-4o').allowed, isFalse);
       // 换个模型不受影响（学习按 key+model 隔离）
       expect(rl.checkKey(key, model: 'claude-3').allowed, isTrue);
@@ -150,8 +150,8 @@ void main() {
         name: 'reset-key',
       );
       final rl = RateLimiter(enabled: true, adaptiveTpmEnabled: true, tokensPerMinutePerKey: 0);
-      rl.recordTokens(key, 100, model: 'gpt-4');
-      rl.recordUpstreamTpmLimit(key, 'gpt-4', 100);
+      rl.recordTokens(key, 5000, model: 'gpt-4');
+      rl.recordUpstreamTpmLimit(key, 'gpt-4', 5000);
       expect(rl.checkKey(key, model: 'gpt-4').allowed, isFalse);
       rl.resetLearn(key);
       expect(rl.checkKey(key, model: 'gpt-4').allowed, isTrue);
@@ -168,6 +168,96 @@ void main() {
       rl.recordTokens(key, 1000, model: 'gpt-4');
       rl.recordUpstreamTpmLimit(key, 'gpt-4', 1000); // 未开启 → 不生效
       expect(rl.checkKey(key, model: 'gpt-4').allowed, isTrue);
+    });
+  });
+
+  group('自适应 QPS/RPM 挡板（应对上游请求数限流）', () {
+    test('识别可恢复 QPS/RPM 限流：429 + requests/rpm 关键词', () {
+      expect(
+        RateLimiter.isRecoverableQpsLimit(
+            429, '{"error":{"code":"rate_limit_exceeded"}}'),
+        isTrue,
+      );
+      expect(
+        RateLimiter.isRecoverableQpsLimit(
+            429, '{"error":"requests per minute limit exceeded"}'),
+        isTrue,
+      );
+      expect(
+        RateLimiter.isRecoverableQpsLimit(429, '{"error":"some other thing"}'),
+        isFalse,
+      );
+      expect(RateLimiter.isRecoverableQpsLimit(503, 'rpm'), isFalse);
+    });
+
+    test('上游 QPS 429 学习下调后，未配置硬限的 key 也会被软挡板拦截', () async {
+      final key = await keyManager.createKey(
+        provider: 'openai',
+        plainKey: 'sk-qps',
+        name: 'qps-key',
+      );
+      final rl = RateLimiter(enabled: true, adaptiveQpsEnabled: true);
+      // 默认 maxRpm=0（不限）：未学习前应放行
+      expect(rl.effectiveRpm(key), 0);
+      expect(rl.checkKey(key).allowed, isTrue);
+      // 撞墙：首次学习起点 30 → ×0.7 = 21
+      rl.recordUpstreamQpsLimit(key);
+      expect(rl.learnedQpm(key), 21);
+      // 生效上限 = floor(21 × 0.95) = 19
+      expect(rl.effectiveRpm(key), 19);
+      // 短时间内连续消耗：突发容量有限，最终必然触顶被拒
+      var allowed = 0;
+      for (var i = 0; i < 40; i++) {
+        if (rl.consumeKey(key)) allowed++;
+      }
+      expect(allowed, greaterThan(0));
+      expect(allowed, lessThan(40));
+      expect(rl.checkKey(key).allowed, isFalse);
+    });
+
+    test('未撞过墙的 key 不会被凭空建立学习上限', () async {
+      final key = await keyManager.createKey(
+        provider: 'openai',
+        plainKey: 'sk-qps-none',
+        name: 'qps-none-key',
+      );
+      final rl = RateLimiter(enabled: true, adaptiveQpsEnabled: true);
+      rl.noteQpsHealthy(key); // 无学习值 → 不建立挡板
+      expect(rl.learnedQpm(key), isNull);
+      expect(rl.effectiveRpm(key), 0);
+      expect(rl.checkKey(key).allowed, isTrue);
+    });
+
+    test('关闭自适应 QPS 后不学习、不拦截', () async {
+      final key = await keyManager.createKey(
+        provider: 'openai',
+        plainKey: 'sk-qps-off',
+        name: 'qps-off-key',
+      );
+      final rl = RateLimiter(enabled: true, adaptiveQpsEnabled: false);
+      rl.recordUpstreamQpsLimit(key); // 未开启 → 不学习
+      expect(rl.learnedQpm(key), isNull);
+      expect(rl.effectiveRpm(key), 0);
+      expect(rl.checkKey(key).allowed, isTrue);
+    });
+
+    test('配置硬上限时学习值可进一步收紧生效速率', () async {
+      final key = await keyManager.createKey(
+        provider: 'openai',
+        plainKey: 'sk-qps-cfg',
+        name: 'qps-cfg-key',
+        maxRpm: 100,
+      );
+      final rl = RateLimiter(enabled: true, adaptiveQpsEnabled: true);
+      expect(rl.effectiveRpm(key), 100); // 未学习：以配置为准
+      // 学习值需先大于配置才不收紧；连续撞墙把它压到配置以下
+      for (var i = 0; i < 20; i++) {
+        rl.recordUpstreamQpsLimit(key);
+      }
+      final learned = rl.learnedQpm(key)!;
+      expect(learned, lessThan(100));
+      // 收紧后生效速率 = floor(learned × 0.95)，严格低于配置
+      expect(rl.effectiveRpm(key), (learned * 0.95).floor());
     });
   });
 
