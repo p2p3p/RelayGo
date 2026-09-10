@@ -69,6 +69,7 @@ class AppState extends ChangeNotifier {
     loadBalancer = LoadBalancer();
     providerRepository = ProviderRepository(DatabaseHelper.providers);
     settings = _loadSettings();
+    loadBalancer.cooldownSeconds = settings.keyCooldownSeconds;
     logService = LogService(
       DatabaseHelper.logs,
       maxEntries: settings.maxLogEntries,
@@ -706,9 +707,12 @@ class AppState extends ChangeNotifier {
     final keepAliveChanged = s.keepAliveEnabled != settings.keepAliveEnabled;
     settings = s;
     await DatabaseHelper.settings.put('user', s.toJson());
+    proxy.settings = s; // 冷却 / 限流等时间参数即时生效
     proxy.port = s.port;
     proxy.host = s.host;
     proxy.loadBalanceStrategy = s.loadBalanceStrategy;
+    loadBalancer.cooldownSeconds = s.keyCooldownSeconds;
+    proxy.rateLimiter.setWindowSeconds(s.rateLimitWindowSeconds);
     logService.maxEntries = s.maxLogEntries;
     logService.retentionDays = s.logRetentionDays;
     quotaMonitor = QuotaMonitor(settings: s, onAlert: _handleAlert);

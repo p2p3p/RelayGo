@@ -34,6 +34,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late bool _keepAliveEnabled;
   late bool _ignoreBatteryOptimization;
   late int _logRetentionDays;
+  late int _keyCooldownSeconds;
+  late int _quotaCooldownMinutes;
+  late int _rateLimitWindowSeconds;
+  late int _tpmWaitBudgetSeconds;
+  late int _qpsWaitBudgetSeconds;
 
   final _portCtrl = TextEditingController();
 
@@ -49,6 +54,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _keepAliveEnabled = s.keepAliveEnabled;
     _ignoreBatteryOptimization = s.ignoreBatteryOptimization;
     _logRetentionDays = s.logRetentionDays;
+    _keyCooldownSeconds = s.keyCooldownSeconds;
+    _quotaCooldownMinutes = s.quotaCooldownMinutes;
+    _rateLimitWindowSeconds = s.rateLimitWindowSeconds;
+    _tpmWaitBudgetSeconds = s.tpmWaitBudgetSeconds;
+    _qpsWaitBudgetSeconds = s.qpsWaitBudgetSeconds;
     _portCtrl.text = '$_port';
   }
 
@@ -69,6 +79,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       keepAliveEnabled: _keepAliveEnabled,
       ignoreBatteryOptimization: _ignoreBatteryOptimization,
       logRetentionDays: _logRetentionDays,
+      keyCooldownSeconds: _keyCooldownSeconds,
+      quotaCooldownMinutes: _quotaCooldownMinutes,
+      rateLimitWindowSeconds: _rateLimitWindowSeconds,
+      tpmWaitBudgetSeconds: _tpmWaitBudgetSeconds,
+      qpsWaitBudgetSeconds: _qpsWaitBudgetSeconds,
     );
     await app.saveSettings(newSettings);
   }
@@ -165,7 +180,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ]),
 
-          // —— 分组 2：后台运行 ——
+          // —— 分组 2：限流与冷却 ——
+          _section(t.t('限流与冷却')),
+          _card(context, [
+            _numberRow(
+              title: t.t('失败冷却时长'),
+              subtitle: L10n.tr('Key 连续失败后暂停使用的时间'),
+              value: _keyCooldownSeconds,
+              unit: L10n.tr('秒'),
+              onTap: () => _editNumber(
+                context: context,
+                title: t.t('失败冷却时长'),
+                value: _keyCooldownSeconds,
+                min: 0,
+                max: 86400,
+                unit: L10n.tr('秒'),
+                onSaved: (v) {
+                  setState(() => _keyCooldownSeconds = v);
+                  _save(app);
+                },
+              ),
+            ),
+            _divider(),
+            _numberRow(
+              title: t.t('额度耗尽冷却'),
+              subtitle: L10n.tr('Key 额度耗尽后暂停使用的时间'),
+              value: _quotaCooldownMinutes,
+              unit: L10n.tr('分钟'),
+              onTap: () => _editNumber(
+                context: context,
+                title: t.t('额度耗尽冷却'),
+                value: _quotaCooldownMinutes,
+                min: 1,
+                max: 1440,
+                unit: L10n.tr('分钟'),
+                onSaved: (v) {
+                  setState(() => _quotaCooldownMinutes = v);
+                  _save(app);
+                },
+              ),
+            ),
+            _divider(),
+            _numberRow(
+              title: t.t('限流统计窗口'),
+              subtitle: L10n.tr('IP / 全局 / Token 限流的统计时长'),
+              value: _rateLimitWindowSeconds,
+              unit: L10n.tr('秒'),
+              onTap: () => _editNumber(
+                context: context,
+                title: t.t('限流统计窗口'),
+                value: _rateLimitWindowSeconds,
+                min: 5,
+                max: 600,
+                unit: L10n.tr('秒'),
+                onSaved: (v) {
+                  setState(() => _rateLimitWindowSeconds = v);
+                  _save(app);
+                },
+              ),
+            ),
+            _divider(),
+            _numberRow(
+              title: t.t('TPM 等待预算'),
+              subtitle: L10n.tr('撞 TPM 限流后同 Key 等待重试的时间'),
+              value: _tpmWaitBudgetSeconds,
+              unit: L10n.tr('秒'),
+              onTap: () => _editNumber(
+                context: context,
+                title: t.t('TPM 等待预算'),
+                value: _tpmWaitBudgetSeconds,
+                min: 0,
+                max: 120,
+                unit: L10n.tr('秒'),
+                onSaved: (v) {
+                  setState(() => _tpmWaitBudgetSeconds = v);
+                  _save(app);
+                },
+              ),
+            ),
+            _divider(),
+            _numberRow(
+              title: t.t('QPS 等待预算'),
+              subtitle: L10n.tr('撞 QPS/RPM 限流后同 Key 等待重试的时间'),
+              value: _qpsWaitBudgetSeconds,
+              unit: L10n.tr('秒'),
+              onTap: () => _editNumber(
+                context: context,
+                title: t.t('QPS 等待预算'),
+                value: _qpsWaitBudgetSeconds,
+                min: 0,
+                max: 120,
+                unit: L10n.tr('秒'),
+                onSaved: (v) {
+                  setState(() => _qpsWaitBudgetSeconds = v);
+                  _save(app);
+                },
+              ),
+            ),
+          ]),
+
+          // —— 分组 3：后台运行 ——
           _section(t.t('后台运行')),
           _card(context, [
             _row(
@@ -188,7 +302,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ]),
 
-          // —— 分组 3：日志 ——
+          // —— 分组 4：日志 ——
           _section(t.t('日志')),
           _card(context, [
             _row(
@@ -221,7 +335,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 L10n.tr('按天记录，可查看与导出'), const LogFileScreen()),
           ]),
 
-          // —— 分组 4：通用 ——
+          // —— 分组 5：通用 ——
           _section(t.t('通用')),
           _card(context, [
             _row(
@@ -249,7 +363,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 L10n.tr('免费大模型接口推荐'), const FreeApiScreen()),
           ]),
 
-          // —— 分组 5：关于 ——
+          // —— 分组 6：关于 ——
           _section(t.t('关于')),
           _card(context, [
             _row(
@@ -354,6 +468,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(width: 8),
           trailing,
+        ],
+      ),
+    );
+  }
+
+  /// 数值配置行（右侧显示当前值 + 「修改」按钮）
+  Widget _numberRow({
+    required String title,
+    String? subtitle,
+    required int value,
+    required String unit,
+    required VoidCallback onTap,
+  }) {
+    return _row(
+      title: title,
+      subtitle: subtitle,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _monoTag('$value $unit'),
+          TextButton(
+            style: TextButton.styleFrom(
+              minimumSize: const Size(0, 32),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              textStyle:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            onPressed: onTap,
+            child: Text(L10n.tr('修改')),
+          ),
         ],
       ),
     );
@@ -487,6 +631,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
+  }
+
+  /// 通用数值编辑弹框：校验范围后回调 [onSaved]
+  Future<void> _editNumber({
+    required BuildContext context,
+    required String title,
+    required int value,
+    required int min,
+    required int max,
+    required String unit,
+    required ValueChanged<int> onSaved,
+  }) async {
+    final ctrl = TextEditingController(text: '$value');
+    final result = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: unit,
+            helperText: '${L10n.tr('范围')}：$min - $max',
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(L10n.tr('取消'))),
+          TextButton(
+            onPressed: () {
+              final v = int.tryParse(ctrl.text.trim());
+              if (v == null || v < min || v > max) {
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(
+                        '${L10n.tr('请输入')} $min - $max ${L10n.tr('的整数')}')));
+                return;
+              }
+              Navigator.pop(ctx, v);
+            },
+            child: Text(L10n.tr('确定')),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result != null) onSaved(result);
   }
 
   void _openUrl(String url) async {

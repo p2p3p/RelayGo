@@ -19,8 +19,8 @@ class Constants {
   static const String appName = 'RelayGo';
   static const String appSlogan = 'Your AI Relay, Ready to Go';
   static const String appDescription = 'Mobile AI API Relay & Key Manager';
-  static const String appVersion = '1.0.3';
-  static const int appBuildNumber = 3;
+  static const String appVersion = '1.0.4';
+  static const int appBuildNumber = 4;
 
   // 在线更新
   // 方案一（推荐）：GitHub Releases + 应用内检查。配置 `updateGithubRepo`
@@ -126,6 +126,23 @@ class Constants {
   static const int defaultTokenRateLimitPerMinute = 127000; // 默认 127000，0 = 不限制
   static const double defaultBurstMultiplier = 1.5; // 令牌桶突发容量倍数
   static const String retryAfterHeader = 'retry-after';
+
+  // —— 可自定义的冷却 / 限流时间（默认值；运行时以 UserSettings 中的配置为准）——
+  /// Key 连续失败达阈值后的冷却时长（秒）。
+  static const int defaultKeyCooldownSeconds = 300; // 5 分钟
+
+  /// Key 被标记「额度耗尽」后的冷却时长（分钟）。
+  static const int defaultQuotaCooldownMinutes = 30;
+
+  /// 高级限流的滑动统计窗口（秒）。IP / 全局 / 每 key token 的
+  /// 「每分钟」上限都以该窗口统计。
+  static const int defaultRateLimitWindowSeconds = 60;
+
+  /// 撞上游可恢复 TPM 限流时，单次请求在同一 key 上等待窗口刷新的预算（秒）。
+  static const int defaultTpmWaitBudgetSeconds = 8;
+
+  /// 撞上游可恢复 QPS/RPM 限流时，单次请求在同一 key 上等待令牌恢复的预算（秒）。
+  static const int defaultQpsWaitBudgetSeconds = 5;
 
   // —— TPM 自适应挡板 + 429 等待重试（消除上游限流中断）——
   /// 自适应 TPM 挡板默认开启：结合本地用量与上游 429 反馈，把「学到」的

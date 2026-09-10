@@ -52,7 +52,8 @@ class ProxyServer {
   final RateLimitEventLog? rateLimitEventLog;
   final RuleEngine ruleEngine;
   final QuotaMonitor quotaMonitor;
-  final UserSettings settings;
+  /// 运行配置。可在运行时被 AppState 替换（设置变更后即时生效）。
+  UserSettings settings;
 
   /// 响应缓存（需求 2.2.4）
   late final CacheManager cache;
@@ -130,6 +131,7 @@ class ProxyServer {
           requestsPerMinutePerIp: settings.ipRateLimitPerMinute,
           globalRequestsPerMinute: settings.globalRpmLimit,
           adaptiveTpmEnabled: settings.adaptiveTpmEnabled,
+          windowSeconds: settings.rateLimitWindowSeconds,
         );
     this.reportService =
         reportService ?? ReportService(logService, cacheManager: this.cache);
@@ -628,20 +630,20 @@ class ProxyServer {
     // 针对「可恢复 TPM 限流」（429 且命中 tpm/tokens_per_minute 关键词）：
     // 不再立刻换 key 或放弃，而是【在同一 key 上等待 TPM 窗口刷新后重试】，
     // 使“发送继续后仍可使用”的请求在第三方客户端侧不中断。等待受总预算
-    // [Constants.tpmWaitBudgetMs] 约束，超过预算则返回 429 + Retry-After。
+    // [UserSettings.tpmWaitBudgetSeconds] 约束，超过预算则返回 429 + Retry-After。
     int attempts = 0;
     int idx = 0;
     String? lastUpstreamError;
     String? lastActualModel; // 最后一次尝试实际发送的模型名
     // 单次请求允许等待 TPM 窗口刷新的总预算截止时间
     final tpmDeadline =
-        DateTime.now().millisecondsSinceEpoch + Constants.tpmWaitBudgetMs;
+        DateTime.now().millisecondsSinceEpoch + settings.tpmWaitBudgetSeconds * 1000;
     int? tpmRetryAfter; // 最终建议客户端等待的秒数（遭遇可恢复 TPM 限流时）
     bool sawRecoverable429 = false;
     ApiKey? lastTpmKey; // 最近一次触发可恢复 TPM 429 的 key
     // 针对「可恢复 QPS/RPM 限流」（429 + requests/rpm/qps 关键词）的等待预算与状态
     final qpsDeadline =
-        DateTime.now().millisecondsSinceEpoch + Constants.qpsWaitBudgetMs;
+        DateTime.now().millisecondsSinceEpoch + settings.qpsWaitBudgetSeconds * 1000;
     int? qpsRetryAfter;
     bool sawRecoverableQps = false;
     ApiKey? lastQpsKey; // 最近一次触发可恢复 QPS/RPM 429 的 key
@@ -711,7 +713,7 @@ class ProxyServer {
           if (kind == UpstreamErrorKind.rateLimited &&
               UpstreamErrorClassifier.isRecoverableTpm(
                   r.statusCode, errBody ?? '') &&
-              Constants.tpmWaitBudgetMs > 0) {
+              settings.tpmWaitBudgetSeconds > 0) {
             // 自适应限流：记录本次 429
             adaptiveRateLimitManager.onRateLimited(key.id, r.headers);
             // 限流切换事件：先记录旧值，再喂挡板下调
@@ -768,7 +770,7 @@ class ProxyServer {
                   r.statusCode, errBody ?? '') &&
               UpstreamErrorClassifier.isRecoverableQps(
                   r.statusCode, errBody ?? '') &&
-              Constants.qpsWaitBudgetMs > 0) {
+              settings.qpsWaitBudgetSeconds > 0) {
             adaptiveRateLimitManager.onRateLimited(key.id, r.headers);
             final oldQpsBefore = rateLimiter.learnedQpm(key) ??
                 (key.maxRequestsPerMinute > 0
@@ -836,7 +838,7 @@ class ProxyServer {
             if (key.status != KeyStatus.exhausted) {
               key.status = KeyStatus.exhausted;
               key.cooldownUntil = DateTime.now().millisecondsSinceEpoch +
-                  Constants.quotaExhaustedCooldownMs;
+                  settings.quotaCooldownMinutes * 60 * 1000;
               // 额度耗尽是一种「key 问题」，计入失败以便 UI 展示错误倾向；
               // 但直接进入冷却，不必等满 maxFailureThreshold。
               key.failureCount++;
@@ -850,7 +852,7 @@ class ProxyServer {
                 newRpmLimit: key.maxRequestsPerMinute,
                 newTpmLimit:
                     rateLimiter.effectiveTpmLimit(key, model: proxyRequest.model) ?? 0,
-                detail: '上游返回额度耗尽（429/403），Key 已标记 exhausted 并冷却 ${Constants.quotaExhaustedCooldownMs ~/ 60000} 分钟',
+                detail: '上游返回额度耗尽（429/403），Key 已标记 exhausted 并冷却 ${settings.quotaCooldownMinutes} 分钟',
               );
             }
             continue;

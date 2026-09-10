@@ -12,9 +12,12 @@ import 'package:relaygo/models/api_key.dart';
 ///  - smart：按错误率/优先级综合切换
 ///
 /// 失败切换规则：
-///  - 连续失败 [Constants.maxFailureThreshold] 次标记为 error 并进入 [Constants.cooldownSeconds] 冷却
+///  - 连续失败 [Constants.maxFailureThreshold] 次标记为 error 并进入 [cooldownSeconds] 冷却
 ///  - 冷却结束后自动恢复为 active
 class LoadBalancer {
+  /// 失败冷却时长（秒）。由 AppState 依据 UserSettings 注入，支持用户自定义。
+  int cooldownSeconds = Constants.cooldownSeconds;
+
   int _rrIndex = 0;
   final Map<String, int> _connections = {}; // keyId -> 活跃连接数
   final Map<String, int> _latency = {}; // keyId -> 累计耗时（ms）
@@ -189,7 +192,7 @@ class LoadBalancer {
     if (key.failureCount >= Constants.maxFailureThreshold) {
       key.status = KeyStatus.error;
       key.cooldownUntil =
-          DateTime.now().millisecondsSinceEpoch + Constants.cooldownSeconds * 1000;
+          DateTime.now().millisecondsSinceEpoch + cooldownSeconds * 1000;
     }
   }
 
