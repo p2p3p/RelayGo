@@ -37,6 +37,13 @@ class UserSettings {
   bool adaptiveTpmEnabled; // 自适应 TPM 挡板 + 429 等待重试（默认开启）
   bool adaptiveQpsEnabled; // 自适应 QPS/RPM 挡板（学习上游请求数限流，默认开启）
 
+  // —— 可自定义的冷却 / 限流时间 ——
+  int keyCooldownSeconds; // Key 连续失败达阈值后的冷却时长（秒）
+  int quotaCooldownSeconds; // Key 被标记「额度耗尽」后的冷却时长（秒）
+  int rateLimitWindowSeconds; // 高级限流的滑动统计窗口（秒）
+  int tpmWaitBudgetSeconds; // 撞可恢复 TPM 限流时同 key 等待预算（秒）
+  int qpsWaitBudgetSeconds; // 撞可恢复 QPS/RPM 限流时同 key 等待预算（秒）
+
   // —— 在线更新（启动时自动检查，配置项不暴露在设置页）——
   String updateFeedUrl;
   String updateChannel; // stable / beta
@@ -86,6 +93,11 @@ class UserSettings {
     this.burstMultiplier = Constants.defaultBurstMultiplier,
     this.adaptiveTpmEnabled = Constants.defaultAdaptiveTpmEnabled,
     this.adaptiveQpsEnabled = Constants.defaultAdaptiveQpsEnabled,
+    this.keyCooldownSeconds = Constants.defaultKeyCooldownSeconds,
+    this.quotaCooldownSeconds = Constants.defaultQuotaCooldownSeconds,
+    this.rateLimitWindowSeconds = Constants.defaultRateLimitWindowSeconds,
+    this.tpmWaitBudgetSeconds = Constants.defaultTpmWaitBudgetSeconds,
+    this.qpsWaitBudgetSeconds = Constants.defaultQpsWaitBudgetSeconds,
     this.updateFeedUrl = Constants.defaultUpdateFeedUrl,
     this.updateChannel = Constants.defaultUpdateChannel,
     this.autoCheckUpdate = true,
@@ -139,6 +151,16 @@ class UserSettings {
           Constants.defaultAdaptiveTpmEnabled,
       adaptiveQpsEnabled: json['adaptive_qps_enabled'] as bool? ??
           Constants.defaultAdaptiveQpsEnabled,
+      keyCooldownSeconds: json['key_cooldown_seconds'] as int? ??
+          Constants.defaultKeyCooldownSeconds,
+      quotaCooldownSeconds: json['quota_cooldown_seconds'] as int? ??
+          Constants.defaultQuotaCooldownSeconds,
+      rateLimitWindowSeconds: json['rate_limit_window_seconds'] as int? ??
+          Constants.defaultRateLimitWindowSeconds,
+      tpmWaitBudgetSeconds: json['tpm_wait_budget_seconds'] as int? ??
+          Constants.defaultTpmWaitBudgetSeconds,
+      qpsWaitBudgetSeconds: json['qps_wait_budget_seconds'] as int? ??
+          Constants.defaultQpsWaitBudgetSeconds,
       updateFeedUrl:
           json['update_feed_url'] as String? ?? Constants.defaultUpdateFeedUrl,
       updateChannel: json['update_channel'] as String? ??
@@ -188,6 +210,11 @@ class UserSettings {
       'burst_multiplier': burstMultiplier,
       'adaptive_tpm_enabled': adaptiveTpmEnabled,
       'adaptive_qps_enabled': adaptiveQpsEnabled,
+      'key_cooldown_seconds': keyCooldownSeconds,
+      'quota_cooldown_seconds': quotaCooldownSeconds,
+      'rate_limit_window_seconds': rateLimitWindowSeconds,
+      'tpm_wait_budget_seconds': tpmWaitBudgetSeconds,
+      'qps_wait_budget_seconds': qpsWaitBudgetSeconds,
       'update_feed_url': updateFeedUrl,
       'update_channel': updateChannel,
       'auto_check_update': autoCheckUpdate,
@@ -227,6 +254,11 @@ class UserSettings {
     double? burstMultiplier,
     bool? adaptiveTpmEnabled,
     bool? adaptiveQpsEnabled,
+    int? keyCooldownSeconds,
+    int? quotaCooldownSeconds,
+    int? rateLimitWindowSeconds,
+    int? tpmWaitBudgetSeconds,
+    int? qpsWaitBudgetSeconds,
     String? updateFeedUrl,
     String? updateChannel,
     bool? autoCheckUpdate,
@@ -265,6 +297,12 @@ class UserSettings {
       burstMultiplier: burstMultiplier ?? this.burstMultiplier,
       adaptiveTpmEnabled: adaptiveTpmEnabled ?? this.adaptiveTpmEnabled,
       adaptiveQpsEnabled: adaptiveQpsEnabled ?? this.adaptiveQpsEnabled,
+      keyCooldownSeconds: keyCooldownSeconds ?? this.keyCooldownSeconds,
+      quotaCooldownSeconds: quotaCooldownSeconds ?? this.quotaCooldownSeconds,
+      rateLimitWindowSeconds:
+          rateLimitWindowSeconds ?? this.rateLimitWindowSeconds,
+      tpmWaitBudgetSeconds: tpmWaitBudgetSeconds ?? this.tpmWaitBudgetSeconds,
+      qpsWaitBudgetSeconds: qpsWaitBudgetSeconds ?? this.qpsWaitBudgetSeconds,
       updateFeedUrl: updateFeedUrl ?? this.updateFeedUrl,
       updateChannel: updateChannel ?? this.updateChannel,
       autoCheckUpdate: autoCheckUpdate ?? this.autoCheckUpdate,

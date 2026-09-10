@@ -155,10 +155,14 @@ class RateLimiter {
 
   bool enabled;
 
+  /// 高级限流的滑动统计窗口（秒）。IP / 全局 / 每 key token 的「每分钟」上限
+  /// 均按该窗口统计；支持用户自定义（见 [setWindowSeconds]）。
+  int windowSeconds;
+
   final Map<String, TokenBucket> _keyBuckets = {};
   final Map<String, SlidingWindow> _keyTokenWindows = {};
   final Map<String, SlidingWindow> _ipWindows = {};
-  final SlidingWindow _globalWindow = SlidingWindow(const Duration(minutes: 1));
+  late SlidingWindow _globalWindow;
 
   /// 各维度的拒绝计数（供统计报表展示）
   final Map<String, int> denials = {};
@@ -184,7 +188,21 @@ class RateLimiter {
     this.adaptiveTpmEnabled = Constants.defaultAdaptiveTpmEnabled,
     this.adaptiveQpsEnabled = Constants.defaultAdaptiveQpsEnabled,
     this.enabled = true,
-  });
+    this.windowSeconds = Constants.defaultRateLimitWindowSeconds,
+  }) {
+    _globalWindow = SlidingWindow(Duration(seconds: windowSeconds));
+  }
+
+  /// 运行时更新滑动统计窗口；窗口变化时清空已累计的窗口数据，
+  /// 使新窗口立即生效（避免旧窗口跨度与新值不一致导致统计失真）。
+  void setWindowSeconds(int seconds) {
+    final s = seconds < 5 ? 5 : seconds;
+    if (s == windowSeconds) return;
+    windowSeconds = s;
+    _globalWindow = SlidingWindow(Duration(seconds: s));
+    _ipWindows.clear();
+    _keyTokenWindows.clear();
+  }
 
   // ————————————————————————————————————————————
   // 入口级限流（IP / 全局），在读取请求体之前调用
@@ -206,7 +224,7 @@ class RateLimiter {
 
     if (requestsPerMinutePerIp > 0 && clientIp.isNotEmpty) {
       final w = _ipWindows.putIfAbsent(
-          clientIp, () => SlidingWindow(const Duration(minutes: 1)));
+          clientIp, () => SlidingWindow(Duration(seconds: windowSeconds)));
       if (w.count() >= requestsPerMinutePerIp) {
         _deny('ip');
         return RateLimitResult.deny(
@@ -225,7 +243,7 @@ class RateLimiter {
     if (globalRequestsPerMinute > 0) _globalWindow.record(1);
     if (requestsPerMinutePerIp > 0 && clientIp.isNotEmpty) {
       _ipWindows
-          .putIfAbsent(clientIp, () => SlidingWindow(const Duration(minutes: 1)))
+          .putIfAbsent(clientIp, () => SlidingWindow(Duration(seconds: windowSeconds)))
           .record(1);
     }
   }
@@ -285,7 +303,7 @@ class RateLimiter {
   void recordTokens(ApiKey key, int tokens, {String model = ''}) {
     if (!enabled || tokens <= 0) return;
     final tw = _keyTokenWindows
-        .putIfAbsent(key.id, () => SlidingWindow(const Duration(minutes: 1)));
+        .putIfAbsent(key.id, () => SlidingWindow(Duration(seconds: windowSeconds)));
     tw.record(tokens);
 
     // —— 自适应挡板：加性增（AIMD 的 AI：Additive Increase）——
@@ -295,8 +313,8 @@ class RateLimiter {
       final keyed = '${key.id}|$model';
       if (_learnedTpm.containsKey(keyed)) {
         final stable = (_tpmStableMs[keyed] ?? 0) + tokens;
-        // 每累计约 0.75 个窗口（45s）的用量做一次加性增
-        if (stable >= (60 * 1000 * 3 / 4)) {
+        // 每累计约 0.75 个窗口的用量做一次加性增
+        if (stable >= (windowSeconds * 1000 * 3 / 4)) {
           _tpmStableMs[keyed] = 0;
           final learned = _learnedTpm[keyed]!;
           final bumped = (learned * (1 + Constants.tpmAimdUp)).round();

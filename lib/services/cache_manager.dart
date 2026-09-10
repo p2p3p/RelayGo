@@ -75,7 +75,7 @@ class CacheStats {
 ///
 /// - **键**：`method + path + query + provider + 请求体` 的 SHA-256，
 ///   保证相同语义请求命中同一条目，且不同 provider/模型互不串味；
-/// - **TTL**：可配置（默认 5 分钟），读取时惰性淘汰过期项；
+/// - **TTL**：可配置（默认 300 秒），读取时惰性淘汰过期项；
 /// - **容量**：LRU（`LinkedHashMap` 重插入刷新热度），超限淘汰最冷；
 /// - **命中率统计**：hits / misses / stores / evictions；
 /// - **只缓存可安全复用的响应**：2xx、非流式、体积不超过上限；

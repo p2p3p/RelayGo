@@ -1,0 +1,82 @@
+name: Android Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 编译 Release APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # NDK r29 约 1GB，是每次构建最大的下载项；缓存命中后二次构建显著提速
+      - name: 缓存 Android NDK r29
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/ndk/29.0.14206865
+          key: ndk-29.0.14206865-${{ runner.os }}
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # 缓存 Gradle 分发包与依赖（~/.gradle），避免每次重新下载
+      - name: 配置 Gradle 缓存
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 生成 debug 签名（CI 无本地 keystore）
+        run: |
+          mkdir -p ~/.android
+          keytool -genkeypair -v \
+            -keystore ~/.android/debug.keystore \
+            -storepass android -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: 切换为官方 Gradle / Maven 源（CI 加速，仅本次运行生效）
+        run: |
+          sed -i 's|https://mirrors.cloud.tencent.com/gradle/|https://services.gradle.org/distributions/|' \
+            android/gradle/wrapper/gradle-wrapper.properties
+          sed -i '/maven.aliyun.com/d' android/build.gradle android/settings.gradle
+
+      - name: 环境信息
+        run: flutter --version
+
+      - name: 获取依赖
+        run: flutter pub get
+
+      - name: 编译 Release APK（arm64-v8a）
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: relaygo-release-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+      - name: 发布 GitHub Release（仅 tag 触发）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
+          generate_release_notes: true

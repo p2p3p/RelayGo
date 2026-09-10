@@ -257,14 +257,14 @@ class ApiKey {
   /// 是否为 OAuth 认证类型
   bool get isOAuth => authType == 'oauth';
 
-  /// OAuth token 是否即将过期（提前 5 分钟视为需刷新）
+  /// OAuth token 是否即将过期（提前 300 秒视为需刷新）
   bool get oauthTokenNeedsRefresh {
     if (!isOAuth) return false;
     final expiredStr = oauthMetadata['expired'] as String?;
     if (expiredStr == null || expiredStr.isEmpty) return true; // 无过期信息，保守刷新
     final expiry = DateTime.tryParse(expiredStr);
     if (expiry == null) return true;
-    return expiry.isBefore(DateTime.now().add(const Duration(minutes: 5)));
+    return expiry.isBefore(DateTime.now().add(const Duration(seconds: 300)));
   }
 
   /// 获取 OAuth refresh_token（解密后的明文，仅内部使用）
